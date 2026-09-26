@@ -487,7 +487,7 @@ function drawMoon(g,r){
 
 // ---------- game state ----------
 const S={mode:'title',t:0,score:0,best:+(localStorage.getItem('gaston_best')||0),lives:3,combo:0,maxCombo:0,
-  elapsed:0,spawnT:1.2,objs:[],parts:[],pops:[],shake:0,hitstop:0,stage:0,prevStage:-1,fade:1,banner:0,
+  elapsed:0,spawnT:1.2,stepAmt:1,objs:[],parts:[],pops:[],shake:0,hitstop:0,stage:0,prevStage:-1,fade:1,banner:0,
   punch:0,punchDir:0,cool:0,duck:0,duckAmt:0,hurt:0,inv:0,overT:0,newBest:false,blink:0,lean:0,flash:0};
 const keys={};
 
@@ -584,6 +584,7 @@ function update(dt){
   if(keys.duck&&S.duck>0)S.duck=Math.max(S.duck,0.12);
   S.duck=Math.max(0,S.duck-dt);
   S.duckAmt=lerp(S.duckAmt,S.duck>0?1:0,Math.min(1,dt*22));
+  S.stepAmt=lerp(S.stepAmt,(S.punch>0||S.duck>0||S.hurt>0.3)?0:1,Math.min(1,dt*(S.punch>0?30:10)));
   const targetLean=S.punch>0?S.punchDir*10:0;S.lean=lerp(S.lean,targetLean,Math.min(1,dt*25));
 
   if(S.mode==='over'){S.overT+=dt;}
@@ -617,24 +618,45 @@ function update(dt){
 }
 
 // ---------- drawing: character ----------
+function beatClock(){
+  // 8th-note position, locked to the music scheduler when it's playing
+  if(music&&music.running&&actx&&actx.state==='running'){
+    const t0=music.nextT-music.step*music.STEP;return (actx.currentTime-t0)/(music.STEP*2);
+  }
+  return S.t/(60/140/2);
+}
 function drawGaston(g,x,y,t,opt){
   const duckA=opt.duck||0,p=opt.punch||0,pd=opt.punchDir||0,lean=opt.lean||0,hurtA=opt.hurt||0;
-  const idle=p<=0&&duckA<0.05;
-  const bounce=Math.abs(Math.sin(t*6))*5*(1-duckA);
+  const stepA=opt.stepAmt==null?1:opt.stepAmt;
+  // --- boxer's stutter-step, locked to 8th notes at 140 BPM ---
+  const e=opt.eighth==null?t/(60/140/2):opt.eighth;
+  const n=Math.floor(e),f=e-n,cyc=((n%16)+16)%16;
+  const dbl=cyc===14||cyc===15;                    // quick 16th double-tap every 2 bars
+  const fq=dbl?(f*2)%1:f;
+  const activeFoot=dbl?1:(n%2?1:-1);
+  const hopC=Math.sin(fq*Math.PI);
+  const liftOf=s=>s===activeFoot?hopC*(dbl?5:8)*stepA:0;
+  const sway=Math.sin(e*Math.PI/2)*4*stepA;        // small lateral shuffle, averages to centre
+  const bounce=(hopC*3.5*stepA+(1-stepA)*Math.abs(Math.sin(t*6))*2)*(1-duckA);
   g.save();g.translate(x,y);
   // shadow
-  g.fillStyle='rgba(0,0,0,.28)';g.beginPath();g.ellipse(0,2,58,10,0,0,7);g.fill();
+  g.fillStyle='rgba(0,0,0,.28)';g.beginPath();g.ellipse(sway*0.5,2,58,10,0,0,7);g.fill();
   const hipY=-92+duckA*66-bounce;
-  const bodyX=lean+(hurtA>0?Math.sin(t*60)*4:0);
-  const shuffle=idle?Math.sin(t*3)*4:0;
+  const bodyX=lean+sway+(hurtA>0?Math.sin(t*60)*4:0);
+  const stance=p>0?4:0;
   // legs
   const leg=(s)=>{
-    const fx=s*26+(s<0?shuffle:-shuffle)*0.5,kx=s*(18+duckA*34)+bodyX*0.3,ky=hipY*0.5+duckA*6,hx=s*14+bodyX;
+    const lift=liftOf(s);
+    const fx=s*(26+stance)+sway*0.55+s*lift*0.35+(p>0?pd*3:0),fy=-12-lift;
+    const kx=s*(18+duckA*34)+bodyX*0.3+s*lift*0.5,ky=hipY*0.5+duckA*6-lift*0.6,hx=s*14+bodyX;
     g.strokeStyle=SUIT;g.lineWidth=20;g.lineCap='round';g.lineJoin='round';
-    g.beginPath();g.moveTo(hx,hipY);g.quadraticCurveTo(kx,ky,fx,-12);g.stroke();
-    g.strokeStyle='rgba(0,0,0,.18)';g.lineWidth=3;g.beginPath();g.moveTo(hx+s*6,hipY+4);g.quadraticCurveTo(kx+s*6,ky,fx+s*6,-14);g.stroke();
-    g.fillStyle='#3a2314';g.beginPath();g.ellipse(fx+s*6,-5,17,8,0,0,7);g.fill();
-    g.fillStyle='rgba(255,255,255,.25)';g.beginPath();g.ellipse(fx+s*9,-8,6,2,0,0,7);g.fill();
+    g.beginPath();g.moveTo(hx,hipY);g.quadraticCurveTo(kx,ky,fx,fy);g.stroke();
+    g.strokeStyle='rgba(0,0,0,.18)';g.lineWidth=3;g.beginPath();g.moveTo(hx+s*6,hipY+4);g.quadraticCurveTo(kx+s*6,ky,fx+s*6,fy-2);g.stroke();
+    // shoe: heel lifts, toe stays near the ground
+    g.save();g.translate(fx+s*6,-5-lift*0.7);g.rotate(-s*lift*0.03);
+    g.fillStyle='#3a2314';g.beginPath();g.ellipse(0,0,17,8-lift*0.25,0,0,7);g.fill();
+    g.fillStyle='rgba(255,255,255,.25)';g.beginPath();g.ellipse(s*3,-3,6,2,0,0,7);g.fill();
+    g.restore();
   };
   leg(-1);leg(1);
   g.translate(bodyX,0);
@@ -702,6 +724,31 @@ function drawGaston(g,x,y,t,opt){
   if(p>0&&pd<0){arm(shR,hR,sR,1);arm(shL,hL,sL,-1);}else{arm(shL,hL,sL,-1);arm(shR,hR,sR,1);}
   g.restore();
 }
+// blond handlebar mustache with upturned spiral tips (drawn over the side hair)
+function stacheCurl(g,s){
+  g.beginPath();g.moveTo(s*17,15.5);
+  g.quadraticCurveTo(s*25,16.5,s*29,13);
+  const cx=s*28.5,cy=6.5;
+  for(let i=0;i<=26;i++){const k=i/26,a=Math.PI/2-k*Math.PI*1.75,r=6.8-k*4.3;g.lineTo(cx+s*Math.cos(a)*r,cy+Math.sin(a)*r);}
+}
+function drawStache(g,x,y,sc){
+  const FILL='#e7bd4c',LINE='#8e6a1c',SHADE='#c99a2e';
+  g.save();g.translate(x,y);g.scale(sc,sc);g.lineCap='round';g.lineJoin='round';
+  const body=()=>{g.beginPath();g.moveTo(0,10.5);
+    g.bezierCurveTo(-7,8,-14,9.5,-19,14.5);g.bezierCurveTo(-13,17.5,-6,18.5,0,15.5);
+    g.bezierCurveTo(6,18.5,13,17.5,19,14.5);g.bezierCurveTo(14,9.5,7,8,0,10.5);g.closePath();};
+  // outline pass
+  g.strokeStyle=LINE;g.lineWidth=5.6;[-1,1].forEach(s=>{stacheCurl(g,s);g.stroke();});
+  body();g.lineWidth=2.4;g.stroke();
+  // fill pass
+  g.strokeStyle=FILL;g.lineWidth=3;[-1,1].forEach(s=>{stacheCurl(g,s);g.stroke();});
+  body();g.fillStyle=FILL;g.fill();
+  // texture: centre part + a few strands
+  g.strokeStyle=SHADE;g.lineWidth=1;g.beginPath();g.moveTo(0,11);g.lineTo(0,15);
+  [-1,1].forEach(s=>{for(let i=0;i<3;i++){g.moveTo(s*(4+i*4.5),12+i*0.3);g.lineTo(s*(6+i*4.5),15.5);}});g.stroke();
+  g.strokeStyle='rgba(255,245,200,.7)';g.lineWidth=1.2;g.beginPath();g.moveTo(-12,11.6);g.quadraticCurveTo(-6,10,-2,11.2);g.moveTo(2,11.2);g.quadraticCurveTo(6,10,12,11.6);g.stroke();
+  g.restore();
+}
 function drawHead(g,x,y,t,hurtA,blink){
   g.save();g.translate(x,y);
   const H_='#f4d26a',HD='#d9ae3f',HL='#fff0a8';
@@ -734,13 +781,6 @@ function drawHead(g,x,y,t,hurtA,blink){
   // mouth
   if(hurtA>0.3){g.fillStyle='#5a1f1a';g.beginPath();g.ellipse(0,22,4,5,0,0,7);g.fill();}
   else{g.strokeStyle='#8a4a3a';g.lineWidth=1.8;g.beginPath();g.moveTo(-5,21);g.lineTo(5,21);g.stroke();}
-  // mustache
-  g.fillStyle='#6b3f1c';g.strokeStyle='#6b3f1c';g.lineCap='round';
-  g.beginPath();g.moveTo(0,11);
-  g.bezierCurveTo(-8,9,-16,11,-20,16);g.bezierCurveTo(-14,15,-7,18,0,16);
-  g.bezierCurveTo(7,18,14,15,20,16);g.bezierCurveTo(16,11,8,9,0,11);g.fill();
-  g.lineWidth=3;
-  [-1,1].forEach(s=>{g.beginPath();g.moveTo(s*19,15.5);g.bezierCurveTo(s*27,17,s*32,10,s*29,5);g.bezierCurveTo(s*27,2,s*23,4,s*25,7);g.stroke();});
   // front hair: bangs cap + side curtains
   g.fillStyle=H_;
   g.beginPath();g.moveTo(-31,-6);g.quadraticCurveTo(-34,-44,0,-44);g.quadraticCurveTo(34,-44,31,-6);
@@ -749,6 +789,7 @@ function drawHead(g,x,y,t,hurtA,blink){
   [-1,1].forEach(s=>{g.beginPath();g.moveTo(s*31,-10);g.quadraticCurveTo(s*38,4,s*34,16);g.quadraticCurveTo(s*29,20,s*24,15);g.quadraticCurveTo(s*26,0,s*22,-10);g.closePath();g.fill();});
   g.strokeStyle=HL;g.lineWidth=3;g.beginPath();g.moveTo(-18,-34);g.quadraticCurveTo(-4,-42,12,-36);g.stroke();
   g.strokeStyle=HD;g.lineWidth=1.4;[-16,-4,8,20].forEach(hx=>{g.beginPath();g.moveTo(hx,-40);g.quadraticCurveTo(hx-2,-26,hx-3,-12);g.stroke();});
+  drawStache(g,0,0,1);
   g.restore();
 }
 
@@ -809,11 +850,8 @@ function txt(g,s,x,y,size,col,align,stroke){
   g.fillStyle=col||'#fff';g.fillText(s,x,y);
 }
 function mustacheIcon(g,x,y,on){
-  g.save();g.translate(x,y);g.fillStyle=on?'#6b3f1c':'rgba(0,0,0,.25)';g.strokeStyle=g.fillStyle;
-  g.beginPath();g.moveTo(0,-2);g.bezierCurveTo(-6,-4,-11,-2,-13,2);g.bezierCurveTo(-8,2,-4,4,0,2);g.bezierCurveTo(4,4,8,2,13,2);g.bezierCurveTo(11,-2,6,-4,0,-2);g.fill();
-  g.lineWidth=2.4;g.lineCap='round';[-1,1].forEach(s=>{g.beginPath();g.moveTo(s*12,2);g.bezierCurveTo(s*18,3,s*20,-3,s*17,-5);g.stroke();});
-  if(on){g.strokeStyle='rgba(255,255,255,.9)';g.lineWidth=1;}
-  g.restore();
+  g.save();g.translate(x,y);if(!on){g.globalAlpha=0.25;}
+  drawStache(g,0,-9*0.46,0.46);g.restore();
 }
 function drawHUD(g){
   txt(g,String(S.score),16,30,30,'#fff','left');
@@ -870,7 +908,7 @@ function render(){
   // character
   const blinkVis=S.inv>0&&Math.floor(S.inv*14)%2===0&&S.mode==='play';
   ctx.save();if(blinkVis)ctx.globalAlpha=0.45;
-  drawGaston(ctx,CX,GROUND,S.t,{duck:S.duckAmt,punch:S.punch,punchDir:S.punchDir,lean:S.lean,hurt:S.hurt,blink:S.blink});
+  drawGaston(ctx,CX,GROUND,S.t,{eighth:beatClock(),stepAmt:S.stepAmt,duck:S.duckAmt,punch:S.punch,punchDir:S.punchDir,lean:S.lean,hurt:S.hurt,blink:S.blink});
   ctx.restore();
   for(const o of S.objs)drawObj(ctx,o);
   for(const p of S.parts){
